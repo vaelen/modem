@@ -118,8 +118,15 @@ def value(ser, query):
     return got.split(b"\r\n")[1].split(b": ", 1)[1]
 
 
+def atz(ser):
+    """ATZ, then echo off again: the saved profile may have echo on."""
+    eq(at(ser, b"ATZ"), OK)
+    at(ser, b"ATE0")
+
+
 def test_config(ser, a):
     at(ser, b"ATZ")
+    echo = b"1" if at(ser, b"AT").startswith(b"AT\r") else b"0"  # the saved E, put back by &W below
     at(ser, b"ATE0")
     eq(at(ser, b"AT"), OK)
     eq(at(ser, b"at"), OK)
@@ -151,23 +158,24 @@ def test_config(ser, a):
     ssid = value(ser, b"AT$SSID?")
     eq(at(ser, b"AT$SSID=Mixed Case;x"), OK)
     eq(value(ser, b"AT$SSID?"), b"Mixed Case;x")
-    eq(at(ser, b"ATZ"), OK)
+    atz(ser)
     eq(value(ser, b"AT$SSID?"), ssid)
     wait_wifi(ser)
     # AT&F is RAM only: defaults (echo on, WiFi cleared), ATZ brings the profile back
     eq(at(ser, b"AT&F"), OK)
     eq(at(ser, b"ATE0"), b"ATE0\r" + OK)
     assert b"WIFI: NOT CONFIGURED" in at(ser, b"ATI")
-    eq(at(ser, b"ATZ"), OK)
+    atz(ser)
     wait_wifi(ser)
     # AT&W persists (ATZ reloads flash); without it ATZ reverts
     eq(at(ser, b"AT$PORT=2400"), OK)
-    eq(at(ser, b"ATZ"), OK)
+    atz(ser)
     eq(value(ser, b"AT$PORT?"), port)
-    eq(at(ser, b"AT$PORT=2400&W"), OK)
-    eq(at(ser, b"ATZ"), OK)
+    eq(at(ser, b"AT$PORT=2400;E" + echo + b"&W"), OK)
+    atz(ser)
     eq(value(ser, b"AT$PORT?"), b"2400")
-    eq(at(ser, b"AT$PORT=" + port + b"&W"), OK)
+    eq(at(ser, b"AT$PORT=" + port + b";E" + echo + b"&W"), OK)
+    atz(ser)
     # +IPR: OK at the old rate, then the new one; ATZ goes back to the saved 19200
     eq(at(ser, b"AT+IPR=38400"), OK)
     ser.baudrate = 38400
@@ -175,6 +183,7 @@ def test_config(ser, a):
     eq(value(ser, b"AT+IPR?"), b"38400")
     eq(at(ser, b"ATZ"), OK)
     ser.baudrate = 19200
+    at(ser, b"ATE0")
     eq(at(ser, b"AT"), OK)
 
 

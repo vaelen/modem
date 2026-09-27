@@ -297,7 +297,9 @@ static void pumpToTcp() {
 }
 
 static void checkGuard() {
-    if (nheld == 0 || millis() - lastModemMs < GUARD_MS) return;
+    // Bytes still queued behind the '+' arrived inside the guard time, even if
+    // a stalled TCP send kept us from reading them: not an escape yet.
+    if (nheld == 0 || Modem.available() || millis() - lastModemMs < GUARD_MS) return;
     if (nheld == 3) {
         state = ONLINE_CMD;
         nline = 0;

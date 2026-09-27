@@ -1,0 +1,262 @@
+# Modem firmware: design
+
+A Hayes-style WiFi modem for the TheOldNet v6 board (ESP8266 NodeMCU, see `HARDWARE.md`). It carries over
+the behaviour of `simple-modem-emulator/modem.c`: it answers TCP callers, dials out to `host[:port]`,
+handles the `+++` escape, and bans abusive callers by IP with `AT+BAN`. Everything else is left out.
+
+## Goals and non-goals
+
+- **In:**
+  - Inbound and outbound TCP calls.
+  - Hayes command mode.
+  - IP bans.
+  - Configuration through AT commands on the DB9, stored in flash.
+  - Optional RTS/CTS.
+- **Out:** SLIP, PPP, telnet IAC handling, web UI, mDNS, OTA, SD card, PETSCII, speed dial, `RING`/S0,
+  the LED, soft-AP setup mode, and a USB console or log. The ESP8266's only full-duplex UART drives the
+  DB9, so a USB console would need SoftwareSerial. It isn't worth it.
+- **Defaults:** the DB9 runs at **19200 8N1**.
+
+## Files
+
+```
+platformio.ini                env:nodemcuv2 (firmware), env:native (unit tests)
+include/board.h               everything board-specific: Modem alias, pins, WiFi header, modemBegin()
+include/at.h, src/at.cpp      AT command-line tokenizer; plain C++, no Arduino calls
+include/bans.h, src/bans.cpp  strike table; plain C++, no Arduino calls (time passed in)
+src/main.cpp                  setup/loop, call state machine, command handlers, config load/save
+test/test_at/                 Unity test for the tokenizer (native)
+test/test_bans/               Unity test for ban durations, escalation, expiry, table-full reuse (native)
+tools/hwtest.py               end-to-end test against real hardware (port of test.sh; pyserial + sockets)
+```
+
+`main.cpp` includes only `board.h`, `at.h`, `bans.h`, `<EEPROM.h>` and the Arduino core. It never names `Serial`,
+`Serial1` or a GPIO number.
+
+## Board layer (`include/board.h`)
+
+The board layer is a single header with one `#if` block per board:
+
+```cpp
+#if defined(ARDUINO_ESP8266_NODEMCU_ESP12E)       // TheOldNet v6 carrier
+  #include <ESP8266WiFi.h>
+  #define Modem   Serial        // UART0, swapped to GPIO13/15 → DB9
+  #define MODEM_RX_BUFFER  1024 // UART receive buffer; the CTS thresholds are ¾ and ¼ of it
+  #define PIN_CTS_OUT      12   // D6 → DB9 pin 8
+  #define PIN_RTS_IN       14   // D5 ← DB9 pin 7
+  #define PIN_ASSERTED     LOW  // MAX3232 inverts: TTL LOW = RS-232 +V
+  #define PIN_BAUD_RESET   0    // FLASH button, active LOW
+  inline void modemBegin(uint32_t baud) {
+    Serial.setRxBufferSize(MODEM_RX_BUFFER); Serial.begin(baud); Serial.swap();
+  }
+#else
+  #error "Add your board to board.h"
+#endif
+```
+
+Porting to a new board means adding one block to this header. For example, an ESP32 block would use
+`#define Modem Serial2` and `Serial2.begin(baud, SERIAL_8N1, RX, TX)`. A board without a given line
+(RTS/CTS, the reset button) leaves that pin undefined, and the code that uses it compiles out under
+`#ifdef`.
+
+Before the swap, the boot ROM prints to USB at 74880 baud, so the DB9 host never sees that output.
+After the swap, the USB port is silent.
+
+## Network
+
+- **Station mode only:**
+  - `WiFi.persistent(false)`, because we store the credentials ourselves.
+  - `WiFi.setAutoReconnect(true)`, then `WiFi.begin(ssid, pass)` at boot and whenever `AT$SSID` or
+    `AT$PASS` changes.
+  - DHCP only.
+- **Listener:** a `WiFiServer` on the configured port (default 23). It restarts when `AT$PORT` changes.
+- **Inbound:** `server.accept()` each loop, checked in this order:
+  1. Banned IP: `stop()` without a word, and the host never sees it (same as `modem.c`).
+  2. A call is already up: send `BUSY, PLEASE TRY AGAIN LATER\r\n`, then `stop()`.
+  3. Otherwise the caller is being answered (`ANSWERING`), and its IP is kept for `AT+BAN`. The host
+     hasn't been told yet. The modem waits up to 1 s (`ANSWER_MS`) for the caller's first 4 bytes:
+     - **`GET `:** an HTTP scanner. It's banned (one strike, as `AT+BAN`) and dropped. The host never
+       sees it.
+     - **The caller hangs up first:** dropped. The host never sees it.
+     - **Anything else, or 1 s passes:** `CONNECT <baud>`, then the held bytes go to the host.
+
+     The wait costs a caller who says nothing first up to 1 s. Scanners send their request at once.
+
+  There's no "serial port down" case on hardware, because DTR isn't wired.
+- **Outbound:**
+  - `ATD[T|P]host[:port]`, with spaces stripped and port 23 by default. Dashes are kept, unlike
+    `modem.c`, because there's no address book here and hostnames can contain them. A string without
+    `.` or `:` gives `NO CARRIER`.
+  - `client.connect()` is **blocking**, with a 10 s timeout that covers DNS too.
+  - `ponytail:` a keypress can't abort a dial while it's in progress, unlike `modem.c`. If that matters,
+    switch to an async connect: lwIP raw API, or `AsyncTCP` on ESP32.
+- **Every call:** `setNoDelay(true)`.
+
+## Call state machine (`main.cpp`)
+
+`modem.c` has four states. `DIALING` goes away because the dial is blocking, and `ANSWERING` is new
+(see Inbound), which gives `IDLE`, `ANSWERING`, `ONLINE` and `ONLINE_CMD`. While `ANSWERING` the host is
+still in command mode, but `ATD` gives `ERROR` (the line is busy).
+
+Each `loop()` pass does this:
+
+1. Baud reset: if FLASH has been held for 3 s, do `AT+IPR=19200` (RAM only, like any setting).
+2. `accept()` a new caller, and check an `ANSWERING` caller's first bytes (see Network).
+3. `ONLINE`:
+   - **Modem → TCP:** read only `min(Modem.available(), client.availableForWrite())` bytes, so the write
+     to the client never blocks. They go through the `+++` detector (the same held-`+` logic as `modem.c`,
+     with a 500 ms guard) and are written to the client. Anything the network can't take yet stays in the
+     UART receive buffer, and CTS (step 5) stops the host before that buffer overflows.
+   - **TCP → Modem:** copy only `min(client.available(), Modem.availableForWrite())` bytes, and nothing
+     at all while RTS is deasserted under `&K3`. Unread data stays in lwIP and the TCP window closes.
+     That's the backpressure `LQ_MAX` gave `modem.c`, with no queue to manage.
+   - `!client.connected() && !client.available()`: send `NO CARRIER` and go to `IDLE`.
+4. `IDLE` / `ONLINE_CMD`:
+   - Modem bytes build the command line. Echo is on under `E1`, and BS/DEL erase a character.
+   - CR runs the parser.
+   - TCP data is dropped in `ONLINE_CMD`, as in `modem.c`.
+5. CTS, under `&K3`: deassert when `Modem.available()` reaches ¾ of `MODEM_RX_BUFFER`, and assert again
+   once it drops to ¼. The gap between the two keeps the line from flapping. The remaining ¼ of the buffer
+   (256 bytes) absorbs whatever the host's UART has already queued when CTS drops; a 16550 FIFO is 16
+   bytes. Under `&K0`, CTS stays asserted.
+6. Guard check: after 500 ms of silence, held `+++` becomes `ONLINE_CMD` + `OK`, and a shorter run of
+   held `+` is sent on as data.
+
+All result codes are verbose: `\r\n<text>\r\n`. There are no numeric codes.
+
+## AT commands
+
+The tokenizer (`at.cpp`) is the one from `modem.c`, split out so it can be unit-tested, with two changes:
+
+- **Only command letters are uppercased.** The values of `$SSID`/`$PASS` keep their case.
+- **`$SSID=`, `$PASS=` and `D` consume the rest of the line verbatim.** This allows `;` and spaces in
+  passwords.
+
+Anything unrecognised still parses cleanly and returns `OK`, so terminal init strings work.
+
+| Command         | Effect                                                             | Profile |
+|-----------------|--------------------------------------------------------------------|---------|
+| `ATD[T\|P]h[:p]`| dial; `CONNECT <baud>` / `NO CARRIER`; `ERROR` if not on-hook      |         |
+| `ATH[0]`        | online-cmd: hang up, `NO CARRIER`; otherwise `OK`                  |         |
+| `ATO`           | online-cmd: back to data, `CONNECT <baud>`                         |         |
+| `AT+BAN`        | strike the current inbound caller; `ERROR` if none                 |         |
+| `AT+BAN=0`      | clear the ban list                                                 |         |
+| `AT+BAN?`       | list the ban table, one line per IP (see below)                    |         |
+| `ATE0` / `ATE1` | command echo off/on (default 1)                                    | yes     |
+| `AT&K0`/`AT&K3` | flow control none / RTS-CTS (default 0)                            | yes     |
+| `AT+IPR=n`      | DB9 baud (300…115200); `OK` sent at the old rate, then switch      | yes     |
+| `AT$SSID=text`  | WiFi SSID; reconnects                                              | yes     |
+| `AT$PASS=text`  | WiFi password; reconnects; never printed                           | yes     |
+| `AT$PORT=n`     | listen port (default 23); restarts the listener                    | yes     |
+| `AT...?`        | `+IPR?`, `$SSID?`, `$PORT?` print the value                        |         |
+| `ATI`           | status: version, WiFi state/SSID/IP, port, baud, bans in table     |         |
+| `AT&W`          | write the current profile to flash                                 |         |
+| `AT&F`          | load factory defaults into RAM and apply them; flash is untouched  |         |
+| `ATZ`           | hang up if online, then reload the profile from flash and apply it |         |
+
+- **Profile:** SSID, password, baud, port, `E` and `&K`. Every setting takes effect as soon as it's
+  set but lives only in RAM until `AT&W`. A bad change is undone with `ATZ` or a reboot. `AT&F` followed
+  by `AT&W` is the full factory reset.
+- **Applying a profile (`ATZ`, `AT&F`)** only touches what changed. WiFi reconnects only if the SSID or
+  password differ, the listener restarts only if the port differs, and the UART re-inits only if the baud
+  differs. Many terminal programs send `ATZ` on startup, and that shouldn't drop WiFi.
+- **`AT+BAN?` output:** one line per entry, then `OK`. Expired entries are listed too, because their
+  strike count still drives the next ban's length (until it's a day old).
+
+  ```
+  +BAN: 203.0.113.7,2,41       IP, strikes, minutes left (0 = not blocked now)
+  +BAN: 198.51.100.23,1,0
+  OK
+  ```
+- **Baud recovery:** if you set a rate your terminal can't use, hold FLASH for 3 s once the board has
+  booted, and the DB9 goes back to 19200 in RAM. Send `AT&W` to keep it. Don't hold it during reset:
+  GPIO0 held LOW at reset puts the ESP8266 into its bootloader.
+
+## Config storage
+
+Arduino `EEPROM` (on ESP it's flash-backed: `EEPROM.begin(sizeof cfg)` / `commit()`). The profile in RAM
+and the one in flash are the same struct:
+
+```cpp
+struct Config {
+  uint32_t magic;     // 'MDM1'; mismatch → defaults (first boot, layout change)
+  char ssid[33];
+  char pass[65];
+  uint32_t baud;      // 19200
+  uint16_t port;      // 23
+  uint8_t echo;       // 1
+  uint8_t flow;       // 0 = none, 3 = RTS/CTS
+};
+```
+
+Flash is written only by `AT&W`, and only when the bytes differ from what's already stored.
+
+## IP bans (`bans.cpp`)
+
+These are the same rules as `modem.c`:
+
+- Strike 1 blocks for 5 min, strike 2 for 1 h, strike 3 and up for 24 h.
+- If the last strike is more than 24 h old, the count starts over.
+- The list lives in RAM and is lost on reboot.
+
+API: `banStrike(ip, now)`, `banCheck(ip, now) → ms left or 0`, `banClear()`, `banCount()`, and
+`banEntry(i, &ip, &strikes, &msLeft, now)` for `AT+BAN?`. IPs are
+`uint32_t` (`(uint32_t)client.remoteIP()`), and times are `millis()`.
+
+- `ponytail:` **256 entries** (3 KB), not 8192. RAM on the ESP8266 is about 40 KB. When the table is
+  full, the stalest entry is reused, same as `modem.c`.
+- `ponytail:` `millis()` wraps at 49 days. An entry that hasn't been touched for more than 49 days could
+  briefly look fresh again. The fix, if it ever matters, is to prune entries older than 24 h on each
+  strike.
+
+## Hardware lines (v6)
+
+- **CTS out** (GPIO12): asserted at boot. Under `&K3` it follows how full the UART receive buffer is (see
+  step 5 above). This normally only matters when the far end stops reading and the TCP send buffer fills.
+- **RTS in** (GPIO14): read only under `&K3`. While it's deasserted, TCP → Modem stops (see step 3 above).
+- `&K3` changes both lines together. There's no separate setting for one direction.
+- **Not wired on the board:** DCD, DSR, DTR and RI. Hosts that wait for DCD/DSR need a cable that loops
+  DTR → DCD+DSR. Hanging up on a DTR drop isn't possible on this board.
+
+## Testing
+
+- **Native Unity tests:** `pio test -e native` runs `test/test_at` and `test/test_bans`. They cover the
+  tokenizer (case kept in values, rest-of-line arguments, chained and junk input) and the ban rules
+  (durations, escalation, the 24 h reset, `millis()` wrap and reuse of the stalest entry).
+- **`tools/hwtest.py`:** `test.sh` rewritten to drive the DB9 through a USB-RS232 adapter (pyserial) and
+  call in over WiFi. It covers:
+  - inbound CONNECT and data both ways
+  - `+++` with and without guard time
+  - ATO and ATH
+  - caller hangup
+  - dial out, and ERROR while online
+  - BUSY
+  - flood versus escape
+  - `AT+BAN;H` followed by silent refusal
+  - `&K3`: a TCP peer that stops reading makes CTS drop (pyserial `cts`), with no bytes lost once it
+    reads again. A host that drops RTS pauses TCP → DB9.
+  - `AT+BAN?` listing, then `AT+BAN=0`
+  - `AT&W` / `AT&F` / `ATZ` round trip (settings survive a reboot only after `AT&W`)
+  - the chained-command parse
+
+  The exec and dial.conf cases are dropped.
+
+## Build order
+
+1. `board.h` + a stub `main.cpp` that echoes on the DB9. **This proves the swap and the pin map on real v6
+   hardware.**
+2. Config + AT parser (the config commands and `ATI`), with WiFi join.
+3. Call state machine: inbound, outbound, `+++`.
+4. Bans + native test.
+5. `&K3` + `hwtest.py`.
+
+## Skipped (add when needed)
+
+| Skipped                   | Add when                                                        |
+|---------------------------|-----------------------------------------------------------------|
+| Speed dial / address book | a host dialer can only send digits                              |
+| Async, abortable dial     | the blocking 10 s dial proves annoying                          |
+| RING / `S0` auto-answer   | a host program insists on answering itself                      |
+| Persistent bans           | reboots are frequent enough that bots get a fresh start         |
+| Soft-AP setup mode        | there's no host terminal for first-time WiFi setup              |
+| Debug log on Serial1      | debugging needs it: TX-only on GPIO2 (free on v6), not on USB   |

@@ -9,7 +9,7 @@ AT&W), is at 19200 baud with &K0 saved, and can reach this machine on
 PEER_PORT. Sections run in order; a failed assert stops the run.
 
   pip install pyserial
-  tools/hwtest.py --port /dev/ttyUSB0 --modem 192.168.1.50 --me 192.168.1.10 [config] [calls]
+  tools/hwtest.py --port /dev/ttyUSB0 --modem 192.168.1.50 --me 192.168.1.10 [config] [calls] [flow]
 """
 import argparse
 import socket
@@ -322,12 +322,67 @@ def test_calls(ser, a):
     at(ser, b"ATE0")
 
 
+def test_flow(ser, a):
+    at(ser, b"ATZ")
+    at(ser, b"ATE0")
+    eq(at(ser, b"AT&K3"), OK)
+    peer_l = listener(a.me, rcvbuf=4096)                # small window: the peer fills fast
+    ser.write(f"ATDT{a.me}:{PEER_PORT}\r".encode())
+    peer, _ = peer_l.accept()
+    eq(rd(ser, 12), CONNECT)
+    # RTS: while the host holds it off, TCP data waits
+    ser.rts = False
+    peer.sendall(b"abc")
+    eq(rd(ser, 1), b"")
+    ser.rts = True
+    eq(rd(ser), b"abc")
+    # CTS: the peer stops reading; the modem drops CTS before its buffer
+    # overflows, and nothing is lost once the peer reads again
+    sent = bytearray()
+    end = time.time() + 30
+    while ser.cts and time.time() < end:
+        sent += bytes((len(sent) + i) % 251 for i in range(64))
+        ser.write(sent[-64:])
+        ser.flush()
+    assert not ser.cts, "CTS never dropped"
+    got = bytearray()
+    peer.settimeout(3)
+    try:
+        while len(got) < len(sent):
+            more = peer.recv(65536)
+            if not more:
+                break
+            got += more
+    except socket.timeout:
+        pass
+    assert got == sent, f"peer got {len(got)} bytes, host sent {len(sent)}"
+    time.sleep(0.5)
+    assert ser.cts, "CTS did not come back"
+    escape(ser)
+    eq(at(ser, b"ATH"), NOCARRIER)
+    peer.close()
+    # &K0: RTS is ignored
+    eq(at(ser, b"AT&K0"), OK)
+    ser.write(f"ATDT{a.me}:{PEER_PORT}\r".encode())
+    peer, _ = peer_l.accept()
+    eq(rd(ser, 12), CONNECT)
+    ser.rts = False
+    peer.sendall(b"xyz")
+    eq(rd(ser), b"xyz")
+    ser.rts = True
+    escape(ser)
+    eq(at(ser, b"ATH"), NOCARRIER)
+    peer.close()
+    peer_l.close()
+    eq(at(ser, b"ATZ"), OK)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", required=True, help="serial device wired to the DB9")
     ap.add_argument("--modem", required=True, help="the modem's IP (ATI)")
     ap.add_argument("--me", required=True, help="this machine's IP, reachable from the modem")
-    ap.add_argument("sections", nargs="*", default=["config", "calls"])
+    ap.add_argument("sections", nargs="*", default=["config", "calls", "flow"])
     a = ap.parse_args()
     ser = serial.Serial(a.port, 19200, timeout=2)
     ser.rts = True

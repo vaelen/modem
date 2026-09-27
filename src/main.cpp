@@ -309,6 +309,9 @@ static void checkGuard() {
 }
 
 static bool hostReady() {             // may we send to the host?
+#ifdef PIN_RTS_IN
+    if (cfg.flow == 3 && digitalRead(PIN_RTS_IN) != PIN_ASSERTED) return false;
+#endif
     return true;
 }
 
@@ -321,6 +324,18 @@ static void pumpToModem() {
     if (n <= 0) return;
     n = client.read(buf, n);
     if (n > 0) Modem.write(buf, n);
+}
+
+// CTS under &K3: drop at ¾ full, raise again at ¼; else always asserted.
+static void updateCts() {
+#ifdef PIN_CTS_OUT
+    static bool asserted = true;
+    int used = Modem.available();
+    if (cfg.flow != 3) asserted = true;
+    else if (used >= MODEM_RX_BUFFER * 3 / 4) asserted = false;
+    else if (used <= MODEM_RX_BUFFER / 4) asserted = true;
+    digitalWrite(PIN_CTS_OUT, asserted ? PIN_ASSERTED : !PIN_ASSERTED);
+#endif
 }
 
 // Drop a caller the host never heard about.
@@ -419,4 +434,5 @@ void loop() {
         }
     }
     if ((state == ONLINE || state == ONLINE_CMD) && !client.connected() && !client.available()) hangup();
+    updateCts();
 }

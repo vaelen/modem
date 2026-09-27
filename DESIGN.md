@@ -49,6 +49,7 @@ The board layer is a single header with one `#if` block per board:
   inline void modemBegin(uint32_t baud) {
     Serial.setRxBufferSize(MODEM_RX_BUFFER); Serial.begin(baud); Serial.swap();
   }
+  inline void modemBaud(uint32_t baud) { Serial.updateBaudRate(baud); }  // AT+IPR; begin() glitches TX
 #else
   #error "Add your board to board.h"
 #endif
@@ -151,12 +152,14 @@ Anything unrecognised still parses cleanly and returns `OK`, so terminal init st
 | `AT...?`        | `+IPR?`, `$SSID?`, `$PORT?` print the value                        |         |
 | `ATI`           | status: version, WiFi state/SSID/IP, port, baud, bans in table     |         |
 | `AT&W`          | write the current profile to flash                                 |         |
-| `AT&F`          | load factory defaults into RAM and apply them; flash is untouched  |         |
+| `AT&F`          | factory defaults into RAM, keeping WiFi and port; flash untouched  |         |
 | `ATZ`           | hang up if online, then reload the profile from flash and apply it |         |
 
 - **Profile:** SSID, password, baud, port, `E` and `&K`. Every setting takes effect as soon as it's
-  set but lives only in RAM until `AT&W`. A bad change is undone with `ATZ` or a reboot. `AT&F` followed
-  by `AT&W` is the full factory reset.
+  set but lives only in RAM until `AT&W`. A bad change is undone with `ATZ` or a reboot.
+- **`AT&F` keeps the SSID, password and listen port.** Terminal programs often send `AT&F` in their init
+  strings, and that mustn't knock the modem off the network. The full factory reset is `AT$SSID=`,
+  `AT$PASS=`, `AT&F`, `AT&W`.
 - **Applying a profile (`ATZ`, `AT&F`)** only touches what changed. WiFi reconnects only if the SSID or
   password differ, the listener restarts only if the port differs, and the UART re-inits only if the baud
   differs. Many terminal programs send `ATZ` on startup, and that shouldn't drop WiFi.

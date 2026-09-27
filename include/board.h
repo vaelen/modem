@@ -23,6 +23,8 @@
       Serial.begin(baud);
       Serial.swap();
   }
+  // Baud change without restarting the UART: a restart glitches TX (junk byte to the host).
+  inline void modemBaud(uint32_t baud) { Serial.updateBaudRate(baud); }
 #else
   #error "Add your board to include/board.h"
 #endif

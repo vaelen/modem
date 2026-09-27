@@ -80,7 +80,7 @@ static void apply(const Config &n) {
     cfg = n;
     if (cfg.baud != old.baud) {
         Modem.flush();
-        modemBegin(cfg.baud);
+        modemBaud(cfg.baud);
     }
     if (strcmp(cfg.ssid, old.ssid) || strcmp(cfg.pass, old.pass)) wifiBegin();
     if (cfg.port != old.port) {
@@ -155,12 +155,27 @@ static void dial(const char *s) {
     goOnline();
 }
 
+// Why WiFi isn't up, for ATI. While it's still trying, the ESP8266 reports
+// plain DISCONNECTED.
+static const char *wifiReason() {
+    switch (WiFi.status()) {
+    case WL_NO_SSID_AVAIL: return "NETWORK NOT FOUND";
+    case WL_CONNECT_FAILED: return "CONNECT FAILED";
+    case WL_CONNECTION_LOST: return "CONNECTION LOST";
+#ifdef ARDUINO_ARCH_ESP8266
+    case WL_WRONG_PASSWORD: return "WRONG PASSWORD";
+#endif
+    case WL_IDLE_STATUS: return "IDLE";
+    default: return "TRYING";
+    }
+}
+
 static void showInfo() {
     info("MODEM " VERSION);
     if (!cfg.ssid[0]) info("WIFI: NOT CONFIGURED");
     else if (WiFi.status() == WL_CONNECTED)
         info("WIFI: CONNECTED %s %s", cfg.ssid, WiFi.localIP().toString().c_str());
-    else info("WIFI: DISCONNECTED %s", cfg.ssid);
+    else info("WIFI: DISCONNECTED %s (%s)", cfg.ssid, wifiReason());
     info("PORT: %u", cfg.port);
     info("BAUD: %lu", (unsigned long)cfg.baud);
     info("BANS: %d", banCount());
@@ -216,8 +231,13 @@ static void runLine() {
                 else err = true;
             } else if (c.name[0] == 'W') {
                 save = true;
-            } else if (c.name[0] == 'F') {
-                defaults(next);
+            } else if (c.name[0] == 'F') {  // keeps WiFi and port: AT&F is in terminal init strings
+                Config f;
+                defaults(f);
+                memcpy(f.ssid, next.ssid, sizeof f.ssid);
+                memcpy(f.pass, next.pass, sizeof f.pass);
+                f.port = next.port;
+                next = f;
             }
         } else if (c.prefix == '+' && !strcmp(c.name, "BAN")) {
             if (c.op == '?') listBans();

@@ -120,7 +120,8 @@ def value(ser, query):
 
 def atz(ser):
     """ATZ, then echo off again: the saved profile may have echo on."""
-    eq(at(ser, b"ATZ"), OK)
+    got = at(ser, b"ATZ")
+    assert got in (OK, b"ATZ\r" + OK), got
     at(ser, b"ATE0")
 
 
@@ -161,12 +162,14 @@ def test_config(ser, a):
     atz(ser)
     eq(value(ser, b"AT$SSID?"), ssid)
     wait_wifi(ser)
-    # AT&F is RAM only: defaults (echo on, WiFi cleared), ATZ brings the profile back
+    # AT&F is RAM only and keeps WiFi and the port, so a terminal init string
+    # can't knock the modem off the network; everything else is default (echo on)
     eq(at(ser, b"AT&F"), OK)
     eq(at(ser, b"ATE0"), b"ATE0\r" + OK)
-    assert b"WIFI: NOT CONFIGURED" in at(ser, b"ATI")
+    assert b"WIFI: CONNECTED" in at(ser, b"ATI"), "AT&F dropped WiFi"
+    eq(value(ser, b"AT$SSID?"), ssid)
+    eq(value(ser, b"AT$PORT?"), port)
     atz(ser)
-    wait_wifi(ser)
     # AT&W persists (ATZ reloads flash); without it ATZ reverts
     eq(at(ser, b"AT$PORT=2400"), OK)
     atz(ser)

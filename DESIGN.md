@@ -1,8 +1,8 @@
 # Modem firmware: design
 
-A Hayes-style WiFi modem for the TheOldNet v6 board (ESP8266 NodeMCU, see `HARDWARE.md`). It carries over
-the behaviour of `simple-modem-emulator/modem.c`: it answers TCP callers, dials out to `host[:port]`,
-handles the `+++` escape, and bans abusive callers by IP with `AT+BAN`. Everything else is left out.
+A Hayes-style WiFi modem for the TheOldNet v6 board (ESP8266 NodeMCU, see `HARDWARE.md`). It answers 
+TCP callers, dials out to `host[:port]`, handles the `+++` escape, and bans abusive callers by IP 
+with `AT+BAN`. Everything else is left out.
 
 ## Goals and non-goals
 

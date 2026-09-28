@@ -155,7 +155,7 @@ def test_config(ser, a):
     assert b"WIFI: CONNECTED" in at(ser, b"ATI"), "ATZ dropped WiFi"
     # ATI
     got = at(ser, b"ATI")
-    for want in (b"MODEM 1.0", b"WIFI: CONNECTED", b"BAUD: 19200", b"BANS: "):
+    for want in (b"MODEM 1.0", b"WIFI: CONNECTED", b"BAUD: 19200", b"FLOW: NONE", b"BANS: "):
         assert want in got, got
     assert got.endswith(OK) and b"PASS" not in got, got
     # SSID keeps case and ';'; ATZ undoes an unsaved change and WiFi comes back
@@ -341,6 +341,9 @@ def test_flow(ser, a):
     at(ser, b"ATZ")
     at(ser, b"ATE0")
     eq(at(ser, b"AT&K3"), OK)
+    eq(value(ser, b"AT&K?"), b"3")
+    eq(value(ser, b"AT&K?"), b"3")                      # a query doesn't change it
+    assert b"FLOW: RTS/CTS" in at(ser, b"ATI")
     peer_l = listener(a.me, rcvbuf=4096)                # small window: the peer fills fast
     ser.write(f"ATDT{a.me}:{PEER_PORT}\r".encode())
     peer, _ = peer_l.accept()
@@ -382,6 +385,7 @@ def test_flow(ser, a):
     peer.close()
     # &K0: RTS is ignored
     eq(at(ser, b"AT&K0"), OK)
+    eq(value(ser, b"AT&K?"), b"0")
     ser.write(f"ATDT{a.me}:{PEER_PORT}\r".encode())
     peer, _ = peer_l.accept()
     eq(rd(ser, 12), CONNECT)

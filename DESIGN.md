@@ -156,8 +156,9 @@ Anything unrecognised still parses cleanly and returns `OK`, so terminal init st
 | `AT$SSID=text`  | WiFi SSID; reconnects                                              | yes     |
 | `AT$PASS=text`  | WiFi password; reconnects; never printed                           | yes     |
 | `AT$PORT=n`     | listen port (default 23); restarts the listener                    | yes     |
-| `AT...?`        | `+IPR?`, `$SSID?`, `$PORT?` print the value                        |         |
-| `ATI`           | status: version, WiFi state/SSID/IP or why not, port, baud, bans   |         |
+| `AT...?`        | `&K?`, `+IPR?`, `$SSID?`, `$PORT?` print the value                 |         |
+| `ATI`           | status: version, WiFi state/SSID/IP or why not, port, baud, flow,  |         |
+|                 | bans                                                               |         |
 | `AT&W`          | write the current profile to flash                                 |         |
 | `AT&F`          | factory defaults into RAM, keeping WiFi and port; flash untouched  |         |
 | `ATZ`           | hang up if online, then reload the profile from flash and apply it |         |

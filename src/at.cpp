@@ -62,6 +62,10 @@ int atParse(char *line, AtCmd *cmds) {
                 k->name[1] = 0;
             }
             if (digit(*p)) k->num = (int)strtol(p, &p, 10);
+            if (*p == '?') {
+                k->op = '?';
+                p++;
+            }
             continue;
         }
         if (c == 'S') {                 // Sn=v / Sn?: value skipped, nothing uses it

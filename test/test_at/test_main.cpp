@@ -40,6 +40,10 @@ static void ampersand_commands() {
     TEST_ASSERT_EQUAL_STRING("K", c[0].name);
     TEST_ASSERT_EQUAL_INT(3, c[0].num);
     TEST_ASSERT_EQUAL_STRING("W", c[1].name);
+    TEST_ASSERT_EQUAL_INT(1, parse("AT&K?"));
+    TEST_ASSERT_EQUAL_STRING("K", c[0].name);
+    TEST_ASSERT_EQUAL_INT(-1, c[0].num);
+    TEST_ASSERT_EQUAL_INT('?', c[0].op);
 }
 
 static void extended_commands_and_chaining() {

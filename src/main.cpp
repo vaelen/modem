@@ -182,6 +182,7 @@ static void showInfo() {
     else info("WIFI: DISCONNECTED %s (%s)", cfg.ssid, wifiError() ? wifiError() : "TRYING");
     info("PORT: %u", cfg.port);
     info("BAUD: %lu", (unsigned long)cfg.baud);
+    info("FLOW: %s", cfg.flow == 3 ? "RTS/CTS" : "NONE");
     info("BANS: %d", banCount());
 }
 
@@ -233,7 +234,8 @@ static void runLine() {
             }
         } else if (c.prefix == '&') {
             if (c.name[0] == 'K') {
-                if (v == 0 || v == 3) next.flow = (uint8_t)v;
+                if (c.op == '?') info("&K: %u", next.flow);
+                else if (v == 0 || v == 3) next.flow = (uint8_t)v;
                 else err = true;
             } else if (c.name[0] == 'W') {
                 save = true;

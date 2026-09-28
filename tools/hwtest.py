@@ -132,6 +132,9 @@ def test_config(ser, a):
     eq(at(ser, b"AT"), OK)
     eq(at(ser, b"at"), OK)
     eq(at(ser, b"hello"), b"")                          # not a command: no answer
+    ser.write(b"\x00\xfe junk")                           # line noise without a CR
+    eq(at(ser, b"AT"), OK)                              # is skipped, like a Hayes modem
+    eq(at(ser, b"xyzATE0"), OK)
     # echo, backspace, and a line applied only after OK (ATE0 is echoed)
     eq(at(ser, b"ATE1"), OK)
     eq(at(ser, b"AX\bT"), b"AX\b \bT\r" + OK)

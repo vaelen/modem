@@ -197,7 +197,9 @@ static void listBans() {
 // applied after OK (so +IPR's OK goes out at the old rate) or dropped on ERROR.
 static void runLine() {
     AtCmd cmds[AT_MAX_CMDS];
-    int n = atParse(line, cmds);
+    char *start = line;                 // noise that had an 'A' in it: parse from the first "AT"
+    while (start[0] && start[1] && !((start[0] | 0x20) == 'a' && (start[1] | 0x20) == 't')) start++;
+    int n = atParse(start[1] ? start : line, cmds);
     if (n == -1) return;                // not a command: ignored, like modem.c
     if (n < 0) { result("ERROR"); return; }
     Config next = cfg;
@@ -292,6 +294,9 @@ static void commandByte(char ch) {
         }
     } else if (ch != '\n') {
         if (cfg.echo) Modem.write(ch);
+        // Like a Hayes modem, skip everything before the "A" of "AT": line
+        // noise (a baud mismatch, boot glitches) can't eat the next command.
+        if (nline == 0 && ch != 'A' && ch != 'a') return;
         if (nline < (int)sizeof line - 1) line[nline++] = ch;
         else lineOverflow = true;
     }

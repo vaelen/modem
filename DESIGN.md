@@ -104,16 +104,20 @@ Each `loop()` pass does this:
 1. Baud reset: if FLASH has been held for 3 s, do `AT+IPR=19200` (RAM only, like any setting).
 2. `accept()` a new caller, and check an `ANSWERING` caller's first bytes (see Network).
 3. `ONLINE`:
-   - **Modem → TCP:** read only `min(Modem.available(), client.availableForWrite())` bytes, so the write
-     to the client never blocks. They go through the `+++` detector (the same held-`+` logic as `modem.c`,
-     with a 500 ms guard) and are written to the client. Anything the network can't take yet stays in the
-     UART receive buffer, and CTS (step 5) stops the host before that buffer overflows.
+   - **Modem → TCP:** bytes go through the `+++` detector (the same held-`+` logic as `modem.c`, with a
+     500 ms guard) into a small buffer that is written to the client. The call's timeout is 0, so
+     `write()` never blocks `loop()`. lwIP can refuse bytes (its segment queue can fill before its send
+     buffer does), and refused bytes stay in the buffer for the next pass. While any are waiting, host
+     bytes aren't read, so they back up in the UART receive buffer and CTS (step 5) stops the host
+     before it overflows. (The core's default is to block for the whole timeout, then drop the rest.)
    - **TCP → Modem:** copy only `min(client.available(), Modem.availableForWrite())` bytes, and nothing
      at all while RTS is deasserted under `&K3`. Unread data stays in lwIP and the TCP window closes.
      That's the backpressure `LQ_MAX` gave `modem.c`, with no queue to manage.
    - `!client.connected() && !client.available()`: send `NO CARRIER` and go to `IDLE`.
 4. `IDLE` / `ONLINE_CMD`:
    - Modem bytes build the command line. Echo is on under `E1`, and BS/DEL erase a character.
+   - Bytes before the first `A` are skipped, and the line is parsed from its first `AT`, as on a Hayes
+     modem. Line noise (a baud mismatch, the boot glitch) can't swallow the next command.
    - CR runs the parser.
    - TCP data is dropped in `ONLINE_CMD`, as in `modem.c`.
 5. CTS, under `&K3`: deassert when `Modem.available()` reaches ¾ of `MODEM_RX_BUFFER`, and assert again
@@ -150,7 +154,7 @@ Anything unrecognised still parses cleanly and returns `OK`, so terminal init st
 | `AT$PASS=text`  | WiFi password; reconnects; never printed                           | yes     |
 | `AT$PORT=n`     | listen port (default 23); restarts the listener                    | yes     |
 | `AT...?`        | `+IPR?`, `$SSID?`, `$PORT?` print the value                        |         |
-| `ATI`           | status: version, WiFi state/SSID/IP, port, baud, bans in table     |         |
+| `ATI`           | status: version, WiFi state/SSID/IP or why not, port, baud, bans   |         |
 | `AT&W`          | write the current profile to flash                                 |         |
 | `AT&F`          | factory defaults into RAM, keeping WiFi and port; flash untouched  |         |
 | `ATZ`           | hang up if online, then reload the profile from flash and apply it |         |
@@ -240,9 +244,11 @@ API: `banStrike(ip, now)`, `banCheck(ip, now) → ms left or 0`, `banClear()`, `
     reads again. A host that drops RTS pauses TCP → DB9.
   - `AT+BAN?` listing, then `AT+BAN=0`
   - `AT&W` / `AT&F` / `ATZ` round trip (settings survive a reboot only after `AT&W`)
-  - the chained-command parse
+  - the chained-command parse, and line noise before `AT`
+  - the `GET ` scanner ban, and callers that hang up before they're answered
 
-  The exec and dial.conf cases are dropped.
+  The exec and dial.conf cases are dropped. `--no-cts` skips the CTS check for adapters that don't
+  report CTS (common with CH340 cables). The FLASH-button reset is checked by hand.
 
 ## Build order
 

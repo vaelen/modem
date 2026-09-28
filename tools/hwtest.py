@@ -349,27 +349,31 @@ def test_flow(ser, a):
     ser.rts = True
     eq(rd(ser), b"abc")
     # CTS: the peer stops reading; the modem drops CTS before its buffer
-    # overflows, and nothing is lost once the peer reads again
-    sent = bytearray()
-    end = time.time() + 30
-    while ser.cts and time.time() < end:
-        sent += bytes((len(sent) + i) % 251 for i in range(64))
-        ser.write(sent[-64:])
-        ser.flush()
-    assert not ser.cts, "CTS never dropped"
-    got = bytearray()
-    peer.settimeout(3)
-    try:
-        while len(got) < len(sent):
-            more = peer.recv(65536)
-            if not more:
-                break
-            got += more
-    except socket.timeout:
-        pass
-    assert got == sent, f"peer got {len(got)} bytes, host sent {len(sent)}"
-    time.sleep(0.5)
-    assert ser.cts, "CTS did not come back"
+    # overflows, and nothing is lost once the peer reads again. Needs an
+    # adapter that reports CTS (many CH340 cables don't wire it): --no-cts skips it.
+    if a.no_cts:
+        print("flow: CTS check skipped (--no-cts)")
+    else:
+        sent = bytearray()
+        end = time.time() + 30
+        while ser.cts and time.time() < end:
+            sent += bytes((len(sent) + i) % 251 for i in range(64))
+            ser.write(sent[-64:])
+            ser.flush()
+        assert not ser.cts, "CTS never dropped"
+        got = bytearray()
+        peer.settimeout(3)
+        try:
+            while len(got) < len(sent):
+                more = peer.recv(65536)
+                if not more:
+                    break
+                got += more
+        except socket.timeout:
+            pass
+        assert got == sent, f"peer got {len(got)} bytes, host sent {len(sent)}"
+        time.sleep(0.5)
+        assert ser.cts, "CTS did not come back"
     escape(ser)
     eq(at(ser, b"ATH"), NOCARRIER)
     peer.close()
@@ -394,6 +398,7 @@ def main():
     ap.add_argument("--port", required=True, help="serial device wired to the DB9")
     ap.add_argument("--modem", required=True, help="the modem's IP (ATI)")
     ap.add_argument("--me", required=True, help="this machine's IP, reachable from the modem")
+    ap.add_argument("--no-cts", action="store_true", help="adapter can't see CTS: skip that check")
     ap.add_argument("sections", nargs="*", default=["config", "calls", "flow"])
     a = ap.parse_args()
     ser = serial.Serial(a.port, 19200, timeout=2)

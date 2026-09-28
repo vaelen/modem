@@ -42,6 +42,8 @@ static int nline = 0;
 static bool lineOverflow = false;
 static bool infoOpen = false;           // an info block has started this command line
 static int nheld = 0;                   // '+' bytes held back pending the guard time
+static uint8_t tcpOut[160];             // host bytes TCP hasn't taken yet (128 read + held '+')
+static int ntcpOut = 0;
 static uint32_t lastModemMs = 0;        // when the last byte came from the host
 static uint8_t early[4];                // an answering caller's first bytes
 static int nearly = 0;
@@ -122,6 +124,7 @@ static void hangup() {
     client.stop();
     callerIp = 0;
     nheld = 0;
+    ntcpOut = 0;
     nline = 0;
     state = IDLE;
     result("NO CARRIER");
@@ -151,6 +154,7 @@ static void dial(const char *s) {
         return;
     }
     client.setNoDelay(true);
+    client.setTimeout(0);               // write() must never block loop(): see tcpFlush()
     callerIp = 0;
     goOnline();
 }
@@ -293,16 +297,27 @@ static void commandByte(char ch) {
     }
 }
 
+// Hand queued host bytes to TCP. The call's timeout is 0, so write() never
+// waits: lwIP can refuse bytes (its segment queue fills before its buffer
+// does), and whatever it refuses stays here for the next pass.
+static void tcpFlush() {
+    if (ntcpOut == 0) return;
+    int w = (int)client.write(tcpOut, ntcpOut);
+    memmove(tcpOut, tcpOut + w, ntcpOut - w);
+    ntcpOut -= w;
+}
+
 // Data mode, host → TCP. A '+' after >= GUARD_MS of silence starts holding
 // up to three; anything else releases them as data. checkGuard() decides.
+// While TCP has refused bytes, host bytes stay in the UART, where CTS sees them.
 static void pumpToTcp() {
-    uint8_t in[128], out[sizeof in + 3];
-    int room = client.availableForWrite() - 3;  // 3: held '+' that may go out too
-    int n = min(Modem.available(), min(room, (int)sizeof in));
+    uint8_t in[128];
+    tcpFlush();
+    if (ntcpOut) return;
+    int n = min(Modem.available(), (int)sizeof in);
     if (n <= 0) return;
     n = Modem.readBytes(in, n);
     uint32_t t = millis();
-    int m = 0;
     for (int i = 0; i < n; i++) {
         bool quiet = t - lastModemMs >= GUARD_MS;
         lastModemMs = t;
@@ -310,10 +325,10 @@ static void pumpToTcp() {
             nheld++;
             continue;
         }
-        while (nheld > 0) { out[m++] = '+'; nheld--; }
-        out[m++] = in[i];
+        while (nheld > 0) { tcpOut[ntcpOut++] = '+'; nheld--; }
+        tcpOut[ntcpOut++] = in[i];
     }
-    if (m) client.write(out, m);
+    tcpFlush();
 }
 
 static void checkGuard() {
@@ -325,7 +340,8 @@ static void checkGuard() {
         nline = 0;
         result("OK");
     } else {
-        client.write((const uint8_t *)"++", nheld);  // lone '+' or '++': just data
+        while (nheld > 0) { tcpOut[ntcpOut++] = '+'; nheld--; }  // lone '+' or '++': just data
+        tcpFlush();
     }
     nheld = 0;
 }
@@ -380,6 +396,7 @@ static void acceptCaller() {
     }
     client = c;
     client.setNoDelay(true);
+    client.setTimeout(0);               // write() must never block loop(): see tcpFlush()
     callerIp = ip;
     nearly = 0;
     answerMs = millis();

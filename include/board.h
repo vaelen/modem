@@ -17,6 +17,8 @@
   #define PIN_RTS_IN       14       // D5 ← DB9 pin 7
   #define PIN_ASSERTED     LOW      // MAX3232 inverts: TTL LOW = RS-232 +V (asserted)
   #define PIN_BAUD_RESET   0        // FLASH button, active LOW; LOW at reset = bootloader
+  #define PIN_LED          16       // D0: the NodeMCU's LED (not the ESP-12's, on GPIO2)
+  #define PIN_LED_ON       LOW
   // begin() puts UART0 back on GPIO1/3 (USB); swap() moves it to the DB9.
   inline void modemBegin(uint32_t baud) {
       Serial.setRxBufferSize(MODEM_RX_BUFFER);

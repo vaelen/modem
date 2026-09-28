@@ -42,6 +42,7 @@ static int nline = 0;
 static bool lineOverflow = false;
 static bool infoOpen = false;           // an info block has started this command line
 static int nheld = 0;                   // '+' bytes held back pending the guard time
+static uint32_t ledFlashStart = 0;      // when a FLASH-button reset started its 1 s of blinks
 static uint8_t tcpOut[160];             // host bytes TCP hasn't taken yet (128 read + held '+')
 static int ntcpOut = 0;
 static uint32_t lastModemMs = 0;        // when the last byte came from the host
@@ -159,9 +160,9 @@ static void dial(const char *s) {
     goOnline();
 }
 
-// Why WiFi isn't up, for ATI. While it's still trying, the ESP8266 reports
-// plain DISCONNECTED.
-static const char *wifiReason() {
+// Why WiFi is down, or nullptr while it's still trying (the ESP8266 then
+// reports plain DISCONNECTED or IDLE). ATI shows it; the LED blinks fast on it.
+static const char *wifiError() {
     switch (WiFi.status()) {
     case WL_NO_SSID_AVAIL: return "NETWORK NOT FOUND";
     case WL_CONNECT_FAILED: return "CONNECT FAILED";
@@ -169,8 +170,7 @@ static const char *wifiReason() {
 #ifdef ARDUINO_ARCH_ESP8266
     case WL_WRONG_PASSWORD: return "WRONG PASSWORD";
 #endif
-    case WL_IDLE_STATUS: return "IDLE";
-    default: return "TRYING";
+    default: return nullptr;
     }
 }
 
@@ -179,7 +179,7 @@ static void showInfo() {
     if (!cfg.ssid[0]) info("WIFI: NOT CONFIGURED");
     else if (WiFi.status() == WL_CONNECTED)
         info("WIFI: CONNECTED %s %s", cfg.ssid, WiFi.localIP().toString().c_str());
-    else info("WIFI: DISCONNECTED %s (%s)", cfg.ssid, wifiReason());
+    else info("WIFI: DISCONNECTED %s (%s)", cfg.ssid, wifiError() ? wifiError() : "TRYING");
     info("PORT: %u", cfg.port);
     info("BAUD: %lu", (unsigned long)cfg.baud);
     info("BANS: %d", banCount());
@@ -436,12 +436,33 @@ static void checkBaudReset() {
         Config n = cfg;
         n.baud = 19200;
         apply(n);
+        ledFlashStart = millis() | 1;   // | 1: 0 means none
         done = true;
     }
 #endif
 }
 
+// Status LED: solid = WiFi up, 1 blink/s = trying, 4/s = WiFi error, 10 in
+// 1 s = FLASH-button baud reset, off = no WiFi configured.
+// ponytail: frozen while a dial blocks (up to 10 s); async dial fixes both.
+static void updateLed() {
+#ifdef PIN_LED
+    uint32_t t = millis();
+    bool on;
+    if (ledFlashStart && t - ledFlashStart < 1000) on = (t - ledFlashStart) % 100 < 50;
+    else if (!cfg.ssid[0]) on = false;
+    else if (WiFi.status() == WL_CONNECTED) on = true;
+    else if (wifiError()) on = t % 250 < 125;
+    else on = t % 1000 < 500;
+    digitalWrite(PIN_LED, on ? PIN_LED_ON : !PIN_LED_ON);
+#endif
+}
+
 void setup() {
+#ifdef PIN_LED
+    digitalWrite(PIN_LED, !PIN_LED_ON);
+    pinMode(PIN_LED, OUTPUT);
+#endif
 #ifdef PIN_CTS_OUT
     digitalWrite(PIN_CTS_OUT, PIN_ASSERTED);
     pinMode(PIN_CTS_OUT, OUTPUT);
@@ -479,4 +500,5 @@ void loop() {
     }
     if ((state == ONLINE || state == ONLINE_CMD) && !client.connected() && !client.available()) hangup();
     updateCts();
+    updateLed();
 }

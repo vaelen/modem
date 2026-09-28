@@ -12,8 +12,9 @@ handles the `+++` escape, and bans abusive callers by IP with `AT+BAN`. Everythi
   - IP bans.
   - Configuration through AT commands on the DB9, stored in flash.
   - Optional RTS/CTS.
+  - A status LED.
 - **Out:** SLIP, PPP, telnet IAC handling, web UI, mDNS, OTA, SD card, PETSCII, speed dial, `RING`/S0,
-  the LED, soft-AP setup mode, and a USB console or log. The ESP8266's only full-duplex UART drives the
+  soft-AP setup mode, and a USB console or log. The ESP8266's only full-duplex UART drives the
   DB9, so a USB console would need SoftwareSerial. It isn't worth it.
 - **Defaults:** the DB9 runs at **19200 8N1**.
 
@@ -46,6 +47,8 @@ The board layer is a single header with one `#if` block per board:
   #define PIN_RTS_IN       14   // D5 ← DB9 pin 7
   #define PIN_ASSERTED     LOW  // MAX3232 inverts: TTL LOW = RS-232 +V
   #define PIN_BAUD_RESET   0    // FLASH button, active LOW
+  #define PIN_LED          16   // D0: the NodeMCU's LED
+  #define PIN_LED_ON       LOW
   inline void modemBegin(uint32_t baud) {
     Serial.setRxBufferSize(MODEM_RX_BUFFER); Serial.begin(baud); Serial.swap();
   }
@@ -224,6 +227,23 @@ API: `banStrike(ip, now)`, `banCheck(ip, now) → ms left or 0`, `banClear()`, `
 - `&K3` changes both lines together. There's no separate setting for one direction.
 - **Not wired on the board:** DCD, DSR, DTR and RI. Hosts that wait for DCD/DSR need a cable that loops
   DTR → DCD+DSR. Hanging up on a DTR drop isn't possible on this board.
+
+## Status LED
+
+The NodeMCU's own LED (GPIO16, active LOW). The ESP-12 module's blue LED on GPIO2 flickers during boot
+and flashing, so it isn't used.
+
+| LED              | Meaning                                                      |
+|------------------|--------------------------------------------------------------|
+| solid on         | WiFi connected                                               |
+| 1 blink/s        | trying to connect                                            |
+| 4 blinks/s       | WiFi error: network not found, wrong password, failed, lost  |
+| 10 blinks in 1 s | FLASH-button baud reset, then back to one of the above       |
+| off              | no WiFi configured                                           |
+
+"Error" is whatever `ATI` shows as the reason in `WIFI: DISCONNECTED <ssid> (<reason>)`. The ESP8266
+keeps retrying after an error, so the LED can alternate between 4/s and 1/s. `ponytail:` the LED
+freezes while a dial blocks (up to 10 s).
 
 ## Testing
 

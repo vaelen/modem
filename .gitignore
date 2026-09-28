@@ -1,3 +1,4 @@
 .pio/
 *.bin
 .superpowers/
+__pycache__/

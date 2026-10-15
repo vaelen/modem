@@ -99,6 +99,8 @@ accepted with `OK`, so terminal init strings work.
   - `GET ` (an HTTP scanner): the caller is banned and dropped. The computer never sees it.
   - Anything else: `CONNECT <baud>`, then those bytes are passed on.
   - Banned IPs are dropped silently.
+  - A caller that redials within 10 s of its last call 3 times in a row gets a strike
+    and is dropped silently.
   - A caller arriving while a call is up gets `BUSY, PLEASE TRY AGAIN LATER`.
 - **Outgoing:** `ATDT bbs.example.com:23`. Dialing blocks for up to 10 s while it connects.
 - **End of call:** `NO CARRIER` when either side hangs up.

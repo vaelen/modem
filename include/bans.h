@@ -12,7 +12,13 @@
 // ponytail: 256 entries (3 KB of the ESP8266's ~40 KB), stalest reused when full.
 #define BAN_MAX 256
 
+// A caller that comes back within REDIAL_MS of its last call, REDIAL_MAX
+// times running, gets a strike.
+#define REDIAL_MS 10000UL
+#define REDIAL_MAX 3
+
 void banStrike(uint32_t ip, uint32_t now);
+bool banRedial(uint32_t ip, uint32_t now);      // note a call; true = it just struck
 uint32_t banCheck(uint32_t ip, uint32_t now);   // ms of ban left, 0 = let in
 void banClear();
 int banCount();

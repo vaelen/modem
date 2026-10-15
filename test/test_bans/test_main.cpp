@@ -79,6 +79,22 @@ static void entry_reports_ip_strikes_and_time_left() {
     TEST_ASSERT_FALSE(banEntry(1, &ip, &strikes, &msLeft, 0));
 }
 
+static void quick_redials_strike() {
+    uint32_t t = 0;
+    TEST_ASSERT_FALSE(banRedial(IP, t));
+    for (int i = 0; i < REDIAL_MAX - 1; i++) TEST_ASSERT_FALSE(banRedial(IP, t += REDIAL_MS - 1));
+    TEST_ASSERT_TRUE(banRedial(IP, t += REDIAL_MS - 1));
+    TEST_ASSERT_EQUAL_UINT32(5 * MIN, banCheck(IP, t));
+    TEST_ASSERT_FALSE(banRedial(IP, t + 1));             // count starts over after a strike
+}
+
+static void slow_or_other_callers_dont_strike() {
+    uint32_t t = 0;
+    for (int i = 0; i < 2 * REDIAL_MAX; i++) TEST_ASSERT_FALSE(banRedial(IP, t += REDIAL_MS));
+    for (int i = 0; i < 2 * REDIAL_MAX; i++) TEST_ASSERT_FALSE(banRedial(IP + (i & 1), t += 1));
+    TEST_ASSERT_EQUAL_INT(0, banCount());
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(unknown_ip_is_let_in);
@@ -89,5 +105,7 @@ int main() {
     RUN_TEST(clear_empties_the_table);
     RUN_TEST(full_table_reuses_the_stalest_entry);
     RUN_TEST(entry_reports_ip_strikes_and_time_left);
+    RUN_TEST(quick_redials_strike);
+    RUN_TEST(slow_or_other_callers_dont_strike);
     return UNITY_END();
 }

@@ -76,6 +76,9 @@ After the swap, the USB port is silent.
 - **Listener:** a `WiFiServer` on the configured port (default 23). It restarts when `AT$PORT` changes.
 - **Inbound:** `server.accept()` each loop, checked in this order:
   1. Banned IP: `stop()` without a word, and the host never sees it (same as `modem.c`).
+     So is a caller redialing within 10 s of its last call (`REDIAL_MS`) for the 3rd time running
+     (`REDIAL_MAX`). That's a strike too, and the count starts over. Only the last caller's IP is
+     tracked.
   2. A call is already up: send `BUSY, PLEASE TRY AGAIN LATER\r\n`, then `stop()`.
   3. Otherwise the caller is being answered (`ANSWERING`), and its IP is kept for `AT+BAN`. The host
      hasn't been told yet. The modem waits up to 1 s (`ANSWER_MS`) for the caller's first 4 bytes:
@@ -209,6 +212,8 @@ These are the same rules as `modem.c`:
 - Strike 1 blocks for 5 min, strike 2 for 1 h, strike 3 and up for 24 h.
 - If the last strike is more than 24 h old, the count starts over.
 - The list lives in RAM and is lost on reboot.
+- `banRedial(ip, now)` is called for every unbanned inbound call. It strikes an IP that redials too
+  fast (see Inbound) and returns true.
 
 API: `banStrike(ip, now)`, `banCheck(ip, now) → ms left or 0`, `banClear()`, `banCount()`, and
 `banEntry(i, &ip, &strikes, &msLeft, now)` for `AT+BAN?`. IPs are

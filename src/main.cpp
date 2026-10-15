@@ -390,12 +390,12 @@ static void dropCaller() {
     state = IDLE;
 }
 
-// Answer, refuse (banned: silently) or send BUSY.
+// Answer, refuse (banned or redialing too fast: silently) or send BUSY.
 static void acceptCaller() {
     WiFiClient c = server.accept();
     if (!c) return;
     uint32_t ip = c.remoteIP();
-    if (banCheck(ip, millis())) { c.stop(); return; }
+    if (banCheck(ip, millis()) || banRedial(ip, millis())) { c.stop(); return; }
     if (state != IDLE) {
         c.print("BUSY, PLEASE TRY AGAIN LATER\r\n");
         c.stop();

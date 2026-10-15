@@ -58,12 +58,27 @@ void banStrike(uint32_t ip, uint32_t now) {
     b->last = now;
 }
 
+// ponytail: tracks only the last caller, so two IPs taking turns slip by;
+// keep a per-entry count in Ban if that shows up.
+static uint32_t lastIp, lastMs;         // the last call, for banRedial
+static int quick;                       // quick redials in a row
+
+bool banRedial(uint32_t ip, uint32_t now) {
+    quick = (ip == lastIp && now - lastMs < REDIAL_MS) ? quick + 1 : 0;
+    lastIp = ip;
+    lastMs = now;
+    if (quick < REDIAL_MAX) return false;
+    quick = 0;
+    banStrike(ip, now);
+    return true;
+}
+
 uint32_t banCheck(uint32_t ip, uint32_t now) {
     Ban *b = find(ip);
     return b ? left(*b, now) : 0;
 }
 
-void banClear() { nbans = 0; }
+void banClear() { nbans = 0; lastIp = 0; quick = 0; }
 
 int banCount() { return nbans; }
 

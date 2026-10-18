@@ -38,9 +38,11 @@ configured with AT commands.
 Needs [PlatformIO](https://platformio.org/).
 
 ```sh
-pio run                                     # build
-pio run -t upload --upload-port /dev/ttyUSB0   # flash over the ESP8266's USB port
+pio run                                                  # build
+pio run -t upload --upload-port /dev/serial/by-id/*CP2102*  # flash over the ESP8266's USB port
 ```
+
+The `by-id` path finds the board's CP2102 even when other USB serial adapters take `/dev/ttyUSB0`.
 
 ## First-time setup
 

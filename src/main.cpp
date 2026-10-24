@@ -216,9 +216,11 @@ static void runLine() {
                 apply(next);
                 dial(c.arg);            // prints its own result
                 return;
-            case 'H':
-                if (state == ONLINE_CMD) { apply(next); hangup(); return; }
-                break;
+            case 'H':                   // on-hook already: NO CARRIER again, for hosts with no DCD
+                apply(next);
+                if (state == ONLINE_CMD) hangup();
+                else result("NO CARRIER");
+                return;
             case 'O':
                 if (state == ONLINE_CMD) { apply(next); goOnline(); return; }
                 break;

@@ -148,7 +148,7 @@ Anything unrecognised still parses cleanly and returns `OK`, so terminal init st
 | Command         | Effect                                                             | Profile |
 |-----------------|--------------------------------------------------------------------|---------|
 | `ATD[T\|P]h[:p]`| dial; `CONNECT <baud>` / `NO CARRIER`; `ERROR` if not on-hook      |         |
-| `ATH[0]`        | online-cmd: hang up, `NO CARRIER`; otherwise `OK`                  |         |
+| `ATH[0]`        | online-cmd: hang up; always `NO CARRIER` (hosts have no DCD)       |         |
 | `ATO`           | online-cmd: back to data, `CONNECT <baud>`                         |         |
 | `AT+BAN`        | strike the current inbound caller; `ERROR` if none                 |         |
 | `AT+BAN=0`      | clear the ban list                                                 |         |

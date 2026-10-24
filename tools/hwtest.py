@@ -229,7 +229,7 @@ def test_calls(ser, a):
     assert eof(caller)
     caller.close()
     eq(at(ser, b"AT"), OK)
-    eq(at(ser, b"ATH"), OK)                             # already on-hook
+    eq(at(ser, b"ATH"), NOCARRIER)                      # already on-hook
     # caller hangs up
     caller = call()
     eq(rd(ser), CONNECT)

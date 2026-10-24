@@ -28,6 +28,7 @@ int atParse(char *line, AtCmd *cmds) {
         k->num = -1;
         k->op = 0;
         k->arg = "";
+        k->val = -1;
         p++;
         if (c == 'D') {                 // dial: T/P modifier, then the rest of the line
             strcpy(k->name, "D");
@@ -68,7 +69,7 @@ int atParse(char *line, AtCmd *cmds) {
             }
             continue;
         }
-        if (c == 'S') {                 // Sn=v / Sn?: value skipped, nothing uses it
+        if (c == 'S') {                 // Sn=v / Sn?
             k->prefix = 'S';
             if (digit(*p)) k->num = (int)strtol(p, &p, 10);
             if (*p == '?') {
@@ -77,7 +78,7 @@ int atParse(char *line, AtCmd *cmds) {
             } else if (*p == '=') {
                 k->op = '=';
                 p++;
-                while (digit(*p)) p++;
+                k->val = digit(*p) ? strtol(p, &p, 10) : 0;
             }
             continue;
         }

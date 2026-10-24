@@ -20,6 +20,7 @@ import serial
 OK = b"\r\nOK\r\n"
 ERROR = b"\r\nERROR\r\n"
 CONNECT = b"\r\nCONNECT 19200\r\n"
+RING = b"\r\nRING\r\n"
 NOCARRIER = b"\r\nNO CARRIER\r\n"
 BUSY = b"BUSY, PLEASE TRY AGAIN LATER\r\n"
 PEER_PORT = 2324
@@ -145,7 +146,7 @@ def test_config(ser, a):
     port = value(ser, b"AT$PORT?")
     for bad in (b"ATE2", b"AT&K1", b"AT+IPR=12345", b"AT$PASS?", b"AT$PORT=0",
                 b"AT$PORT=70000", b"AT$SSID=" + b"x" * 33, b"AT$PASS=" + b"x" * 65,
-                b"AT+BAN", b"AT+BAN=1", b"AT" + b"E" * 200):
+                b"AT+BAN", b"AT+BAN=1", b"ATS0=255", b"AT" + b"E" * 200):
         eq(at(ser, bad), ERROR)
     eq(at(ser, b"AT$PORT=2323;E2"), ERROR)
     eq(value(ser, b"AT$PORT?"), port)
@@ -155,7 +156,7 @@ def test_config(ser, a):
     assert b"WIFI: CONNECTED" in at(ser, b"ATI"), "ATZ dropped WiFi"
     # ATI
     got = at(ser, b"ATI")
-    for want in (b"MODEM 1.0", b"WIFI: CONNECTED", b"BAUD: 19200", b"FLOW: NONE", b"BANS: "):
+    for want in (b"MODEM 1.0", b"WIFI: CONNECTED", b"BAUD: 19200", b"FLOW: NONE", b"S0: 1", b"BANS: "):
         assert want in got, got
     assert got.endswith(OK) and b"PASS" not in got, got
     # SSID keeps case and ';'; ATZ undoes an unsaved change and WiFi comes back
@@ -203,7 +204,7 @@ def test_calls(ser, a):
 
     # inbound: CONNECT, data both ways
     caller = call()
-    eq(rd(ser), CONNECT)
+    eq(rd(ser), RING + CONNECT)
     caller.sendall(b"hello")
     eq(rd(ser), b"hello")
     ser.write(b"world")
@@ -232,7 +233,7 @@ def test_calls(ser, a):
     eq(at(ser, b"ATH"), NOCARRIER)                      # already on-hook
     # caller hangs up
     caller = call()
-    eq(rd(ser), CONNECT)
+    eq(rd(ser), RING + CONNECT)
     caller.close()
     eq(rd(ser, 5), NOCARRIER)
     # dial out (spaces ignored), data both ways
@@ -287,7 +288,7 @@ def test_calls(ser, a):
     eq(at(ser, b"AT"), OK)
     # AT+BAN;H bans and hangs up; the banned IP is dropped silently
     caller = call()
-    eq(rd(ser), CONNECT)
+    eq(rd(ser), RING + CONNECT)
     escape(ser)
     eq(at(ser, b"AT+BAN;H"), NOCARRIER)
     caller.close()
@@ -301,7 +302,7 @@ def test_calls(ser, a):
     eq(at(ser, b"AT+BAN=0"), OK)
     eq(at(ser, b"AT+BAN?"), OK)
     caller = call()
-    eq(rd(ser), CONNECT)
+    eq(rd(ser), RING + CONNECT)
     caller.close()
     eq(rd(ser, 5), NOCARRIER)
     # an HTTP scanner ("GET " first) is banned and dropped; the host never sees it
@@ -315,22 +316,52 @@ def test_calls(ser, a):
     # other first bytes, even ones that start like GET, are answered and delivered
     c = call()
     c.sendall(b"GETX")
-    eq(rd(ser), CONNECT + b"GETX")
+    eq(rd(ser), RING + CONNECT + b"GETX")
     c.close()
     eq(rd(ser, 5), NOCARRIER)
     c = call()
     c.sendall(b"hi")                                    # under 4 bytes: answered after 1 s
-    eq(rd(ser), CONNECT + b"hi")
+    eq(rd(ser), RING + CONNECT + b"hi")
     c.close()
     eq(rd(ser, 5), NOCARRIER)
     # a caller that hangs up before it's answered is dropped silently
     c = call()
     c.close()
     eq(rd(ser, 2), b"")
+    # S0=0: RING every 6 s until ATA; the caller's first bytes follow CONNECT
+    eq(at(ser, b"ATA"), NOCARRIER)                      # nothing ringing
+    eq(at(ser, b"ATS0=0"), OK)
+    eq(at(ser, b"ATS0?"), b"\r\n000\r\n" + OK)
+    eq(at(ser, b"AT+BAN=0"), OK)                        # these calls come quicker than the redial ban allows
+    c = call()
+    c.sendall(b"hey")
+    eq(rd(ser), RING)
+    eq(rd(ser, 4), b"")
+    eq(rd(ser, 3), RING)
+    eq(at(ser, b"ATA"), CONNECT + b"hey")
+    c.sendall(b"there")
+    eq(rd(ser), b"there")
+    c.close()
+    eq(rd(ser, 5), NOCARRIER)
+    # a caller that hangs up while ringing just stops the RINGs
+    eq(at(ser, b"AT+BAN=0"), OK)
+    c = call()
+    eq(rd(ser), RING)
+    c.close()
+    eq(rd(ser, 7), b"")
+    eq(at(ser, b"ATA"), NOCARRIER)
+    # S0=2 answers on the second RING
+    eq(at(ser, b"ATS0=2;+BAN=0"), OK)
+    c = call()
+    eq(rd(ser), RING)
+    eq(rd(ser, 7), RING + CONNECT)
+    c.close()
+    eq(rd(ser, 5), NOCARRIER)
+    eq(at(ser, b"ATS0=1;+BAN=0"), OK)
     # AT$PORT moves the listener at once; ATZ moves it back
     eq(at(ser, b"AT$PORT=2323"), OK)
     caller = call(2323)
-    eq(rd(ser), CONNECT)
+    eq(rd(ser), RING + CONNECT)
     caller.close()
     eq(rd(ser, 5), NOCARRIER)
     eq(at(ser, b"ATZ"), OK)

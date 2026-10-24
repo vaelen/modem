@@ -13,7 +13,7 @@ with `AT+BAN`. Everything else is left out.
   - Configuration through AT commands on the DB9, stored in flash.
   - Optional RTS/CTS.
   - A status LED.
-- **Out:** SLIP, PPP, telnet IAC handling, web UI, mDNS, OTA, SD card, PETSCII, speed dial, `RING`/S0,
+- **Out:** SLIP, PPP, telnet IAC handling, web UI, mDNS, OTA, SD card, PETSCII, speed dial,
   soft-AP setup mode, and a USB console or log. The ESP8266's only full-duplex UART drives the
   DB9, so a USB console would need SoftwareSerial. It isn't worth it.
 - **Defaults:** the DB9 runs at **19200 8N1**.
@@ -80,12 +80,15 @@ After the swap, the USB port is silent.
      (`REDIAL_MAX`). That's a strike too, and the count starts over. Only the last caller's IP is
      tracked.
   2. A call is already up: send `BUSY, PLEASE TRY AGAIN LATER\r\n`, then `stop()`.
-  3. Otherwise the caller is being answered (`ANSWERING`), and its IP is kept for `AT+BAN`. The host
+  3. Otherwise the caller is screened (`SCREENING`), and its IP is kept for `AT+BAN`. The host
      hasn't been told yet. The modem waits up to 1 s (`ANSWER_MS`) for the caller's first 4 bytes:
      - **`GET `:** an HTTP scanner. It's banned (one strike, as `AT+BAN`) and dropped. The host never
        sees it.
      - **The caller hangs up first:** dropped. The host never sees it.
-     - **Anything else, or 1 s passes:** `CONNECT <baud>`, then the held bytes go to the host.
+     - **Anything else, or 1 s passes:** it rings (`RINGING`): `RING` now and every 6 s (`RING_MS`).
+       On the S0th ring, or on `ATA`, it's answered: `CONNECT <baud>`, then the held bytes go to
+       the host. A caller that hangs up while ringing is dropped. Under `S0=0`, one nobody answers
+       is dropped after 10 rings (`RING_MAX`), so a silent bot can't hold the line forever.
 
      The wait costs a caller who says nothing first up to 1 s. Scanners send their request at once.
 
@@ -101,14 +104,16 @@ After the swap, the USB port is silent.
 
 ## Call state machine (`main.cpp`)
 
-`modem.c` has four states. `DIALING` goes away because the dial is blocking, and `ANSWERING` is new
-(see Inbound), which gives `IDLE`, `ANSWERING`, `ONLINE` and `ONLINE_CMD`. While `ANSWERING` the host is
-still in command mode, but `ATD` gives `ERROR` (the line is busy).
+`modem.c` has four states. `DIALING` goes away because the dial is blocking, and `SCREENING` and
+`RINGING` are new (see Inbound), which gives `IDLE`, `SCREENING`, `RINGING`, `ONLINE` and `ONLINE_CMD`.
+While `SCREENING` or `RINGING` the host is still in command mode, but `ATD` gives `ERROR` (the line is
+busy).
 
 Each `loop()` pass does this:
 
 1. Baud reset: if FLASH has been held for 3 s, do `AT+IPR=19200` (RAM only, like any setting).
-2. `accept()` a new caller, and check an `ANSWERING` caller's first bytes (see Network).
+2. `accept()` a new caller, check a `SCREENING` caller's first bytes, and ring a `RINGING` one (see
+   Network).
 3. `ONLINE`:
    - **Modem → TCP:** bytes go through the `+++` detector (the same held-`+` logic as `modem.c`, with a
      500 ms guard) into a small buffer that is written to the client. The call's timeout is 0, so
@@ -120,7 +125,7 @@ Each `loop()` pass does this:
      at all while RTS is deasserted under `&K3`. Unread data stays in lwIP and the TCP window closes.
      That's the backpressure `LQ_MAX` gave `modem.c`, with no queue to manage.
    - `!client.connected() && !client.available()`: send `NO CARRIER` and go to `IDLE`.
-4. `IDLE` / `ONLINE_CMD`:
+4. `IDLE` / `SCREENING` / `RINGING` / `ONLINE_CMD`:
    - Modem bytes build the command line. Echo is on under `E1`, and BS/DEL erase a character.
    - Bytes before the first `A` are skipped, and the line is parsed from its first `AT`, as on a Hayes
      modem. Line noise (a baud mismatch, the boot glitch) can't swallow the next command.
@@ -150,6 +155,8 @@ Anything unrecognised still parses cleanly and returns `OK`, so terminal init st
 | `ATD[T\|P]h[:p]`| dial; `CONNECT <baud>` / `NO CARRIER`; `ERROR` if not on-hook      |         |
 | `ATH[0]`        | online-cmd: hang up; always `NO CARRIER` (hosts have no DCD)       |         |
 | `ATO`           | online-cmd: back to data, `CONNECT <baud>`                         |         |
+| `ATA`           | answer a ringing caller; `NO CARRIER` if none, `ERROR` online-cmd  |         |
+| `ATS0=n`        | answer on the nth `RING` (0–254, default 1); 0 = only `ATA`        | yes     |
 | `AT+BAN`        | strike the current inbound caller; `ERROR` if none                 |         |
 | `AT+BAN=0`      | clear the ban list                                                 |         |
 | `AT+BAN?`       | list the ban table, one line per IP (see below)                    |         |
@@ -159,14 +166,14 @@ Anything unrecognised still parses cleanly and returns `OK`, so terminal init st
 | `AT$SSID=text`  | WiFi SSID; reconnects                                              | yes     |
 | `AT$PASS=text`  | WiFi password; reconnects; never printed                           | yes     |
 | `AT$PORT=n`     | listen port (default 23); restarts the listener                    | yes     |
-| `AT...?`        | `&K?`, `+IPR?`, `$SSID?`, `$PORT?` print the value                 |         |
+| `AT...?`        | `&K?`, `+IPR?`, `$SSID?`, `$PORT?` print the value; `S0?` as `001` |         |
 | `ATI`           | status: version, WiFi state/SSID/IP or why not, port, baud, flow,  |         |
-|                 | bans                                                               |         |
+|                 | S0, bans                                                           |         |
 | `AT&W`          | write the current profile to flash                                 |         |
 | `AT&F`          | factory defaults into RAM, keeping WiFi and port; flash untouched  |         |
 | `ATZ`           | hang up if online, then reload the profile from flash and apply it |         |
 
-- **Profile:** SSID, password, baud, port, `E` and `&K`. Every setting takes effect as soon as it's
+- **Profile:** SSID, password, baud, port, `E`, `&K` and `S0`. Every setting takes effect as soon as it's
   set but lives only in RAM until `AT&W`. A bad change is undone with `ATZ` or a reboot.
 - **`AT&F` keeps the SSID, password and listen port.** Terminal programs often send `AT&F` in their init
   strings, and that mustn't knock the modem off the network. The full factory reset is `AT$SSID=`,
@@ -200,8 +207,12 @@ struct Config {
   uint16_t port;      // 23
   uint8_t echo;       // 1
   uint8_t flow;       // 0 = none, 3 = RTS/CTS
+  uint8_t s0;         // 1; auto-answer ring, 0 = never
 };
 ```
+
+`s0` was added after the layout shipped. Flash past the old struct is erased (0xFF), so `0xFF` loads as
+the default 1 and saved profiles keep their WiFi. That's why `S0` stops at 254.
 
 Flash is written only by `AT&W`, and only when the bytes differ from what's already stored.
 
@@ -272,6 +283,7 @@ freezes while a dial blocks (up to 10 s).
   - `AT&W` / `AT&F` / `ATZ` round trip (settings survive a reboot only after `AT&W`)
   - the chained-command parse, and line noise before `AT`
   - the `GET ` scanner ban, and callers that hang up before they're answered
+  - `RING` and `ATA` under `S0=0`, a caller hanging up mid-ring, and `S0=2`
 
   The exec and dial.conf cases are dropped. `--no-cts` skips the CTS check for adapters that don't
   report CTS (common with CH340 cables). The FLASH-button reset is checked by hand.
@@ -291,7 +303,6 @@ freezes while a dial blocks (up to 10 s).
 |---------------------------|-----------------------------------------------------------------|
 | Speed dial / address book | a host dialer can only send digits                              |
 | Async, abortable dial     | the blocking 10 s dial proves annoying                          |
-| RING / `S0` auto-answer   | a host program insists on answering itself                      |
 | Persistent bans           | reboots are frequent enough that bots get a fresh start         |
 | Soft-AP setup mode        | there's no host terminal for first-time WiFi setup              |
 | Debug log on Serial1      | debugging needs it: TX-only on GPIO2 (free on v6), not on USB   |

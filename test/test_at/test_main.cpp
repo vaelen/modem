@@ -86,9 +86,22 @@ static void init_strings_parse_cleanly() {
     TEST_ASSERT_EQUAL_INT(8, parse("AT E0 V1 &C1;+GCI=FF;S0=0 X4 %C1 S11?"));
     TEST_ASSERT_EQUAL_INT('S', c[4].prefix);
     TEST_ASSERT_EQUAL_INT(0, c[4].num);
+    TEST_ASSERT_EQUAL_INT('=', c[4].op);
+    TEST_ASSERT_EQUAL_INT(0, c[4].val);
     TEST_ASSERT_EQUAL_STRING("X", c[5].name);
     TEST_ASSERT_EQUAL_INT(4, c[5].num);
     TEST_ASSERT_EQUAL_INT(0, parse("AT!!;;  "));    // junk only
+}
+
+static void s_registers_keep_their_value() {
+    TEST_ASSERT_EQUAL_INT(3, parse("ATS0=2X4S11?"));
+    TEST_ASSERT_EQUAL_INT(2, c[0].val);
+    TEST_ASSERT_EQUAL_STRING("X", c[1].name);
+    TEST_ASSERT_EQUAL_INT(11, c[2].num);
+    TEST_ASSERT_EQUAL_INT(-1, c[2].val);
+    TEST_ASSERT_EQUAL_INT(2, parse("ATS0=A"));        // no digits: 0, as on a Hayes
+    TEST_ASSERT_EQUAL_INT(0, c[0].val);
+    TEST_ASSERT_EQUAL_STRING("A", c[1].name);
 }
 
 static void too_many_commands_is_an_error() {
@@ -106,6 +119,7 @@ int main() {
     RUN_TEST(ssid_and_pass_keep_case_and_take_the_rest);
     RUN_TEST(dial_takes_the_rest_of_the_line);
     RUN_TEST(init_strings_parse_cleanly);
+    RUN_TEST(s_registers_keep_their_value);
     RUN_TEST(too_many_commands_is_an_error);
     return UNITY_END();
 }

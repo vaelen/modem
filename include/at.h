@@ -14,6 +14,7 @@ struct AtCmd {
     int num;            // digits after a basic/&/%/\/S command, -1 if none
     char op;            // 0, '=' or '?'
     const char *arg;    // text after '=' in its original case, NUL-terminated; "" if none
+    long val;           // S register value after '=' (0 if no digits), -1 if none
 };
 
 // Tokenize an "AT..." line in place. Returns the number of commands, -1 if

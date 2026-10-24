@@ -3,7 +3,7 @@
 Arduino firmware for an ESP8266 that emulates a modem and allows incomming and outgoing connections over WiFi. It also has the ability to block IP addresses from connecting. This can be used to reduce the number of spam connections to the server.
 
 Features:
-- Listens on a TCP/IP port for incomming callers. (doesn't support 'RING', always auto-answers.)
+- Listens on a TCP/IP port for incomming callers: `RING`, then auto-answer (`ATS0=n`) or `ATA`.
 - The computer can dial out to any `host[:port]`.
 - `+++` escapes to command mode.
 - Abusive callers can be banned by IP, and HTTP scanners are banned automatically.
@@ -71,6 +71,8 @@ accepted with `OK`, so terminal init strings work.
 | `+++`                  | back to command mode during a call (0.5 s of silence before and after) |
 | `ATO`                  | return to the call                                                     |
 | `ATH`                  | hang up                                                                |
+| `ATA`                  | answer a ringing call; `NO CARRIER` if nothing is ringing              |
+| `ATS0=<n>`             | auto-answer on the nth `RING` (0–254, default 1); 0 = wait for `ATA`   |
 | `AT+BAN`               | ban the current caller (from command mode during an inbound call)      |
 | `AT+BAN?`              | list the ban table: `+BAN: <ip>,<strikes>,<minutes left>`              |
 | `AT+BAN=0`             | clear the ban table                                                    |
@@ -80,15 +82,15 @@ accepted with `OK`, so terminal init strings work.
 | `AT$SSID=<name>`       | WiFi network name                                                      |
 | `AT$PASS=<pass>`       | WiFi password (never shown)                                            |
 | `AT$PORT=<port>`       | port callers connect to (default 23)                                   |
-| `AT...?`               | show a setting: `AT+IPR?`, `AT$SSID?`, `AT$PORT?`                      |
-| `ATI`                  | status: WiFi, IP, port, baud, bans                                     |
+| `AT...?`               | show a setting: `AT+IPR?`, `AT$SSID?`, `AT$PORT?`, `ATS0?`             |
+| `ATI`                  | status: WiFi, IP, port, baud, flow, S0, bans                           |
 | `AT&W`                 | save the settings to flash                                             |
 | `ATZ`                  | hang up, then reload the saved settings                                |
 | `AT&F`                 | factory defaults, except the WiFi settings and port                    |
 
 - **Saving:** settings take effect immediately but only reach flash with `AT&W`. `ATZ` or a reboot
   undoes unsaved changes.
-- **What's saved:** SSID, password, baud, port, echo and flow control.
+- **What's saved:** SSID, password, baud, port, echo, flow control and S0.
 - **`ATZ` and WiFi:** `ATZ` only reconnects WiFi if the saved WiFi settings differ, so terminal
   programs that send it at startup don't knock the modem off the network.
 - **Full factory reset:** `AT$SSID=`, `AT$PASS=`, `AT&F`, `AT&W`.
@@ -99,7 +101,10 @@ accepted with `OK`, so terminal init strings work.
 
 - **Incoming:** the modem waits up to 1 s for the caller's first 4 bytes before answering.
   - `GET ` (an HTTP scanner): the caller is banned and dropped. The computer never sees it.
-  - Anything else: `CONNECT <baud>`, then those bytes are passed on.
+  - Anything else rings: `RING` every 6 s. The modem answers on the S0th ring, or when the computer
+    sends `ATA`; then `CONNECT <baud>`, and those bytes are passed on.
+  - A caller that hangs up while ringing just stops the `RING`s. Under `ATS0=0`, one nobody answers
+    is dropped after 10 rings, so it can't hold the line.
   - Banned IPs are dropped silently.
   - A caller that redials within 10 s of its last call 3 times in a row gets a strike
     and is dropped silently.

@@ -16,6 +16,8 @@
 #define DIAL_TIMEOUT_MS 10000   // DNS + TCP connect
 #define BAUD_RESET_MS 3000      // FLASH held this long → 19200
 #define ANSWER_MS 1000          // wait this long for a new caller's first 4 bytes
+#define RING_MS 6000            // one RING every 6 s, like a US phone line
+#define RING_MAX 10             // under S0=0, a caller nobody answers is dropped after this many
 #define CONFIG_MAGIC 0x314D444DUL   // "MDM1" little-endian
 
 struct Config {
@@ -26,9 +28,10 @@ struct Config {
     uint16_t port;
     uint8_t echo;
     uint8_t flow;               // 0 = none, 3 = RTS/CTS
+    uint8_t s0;                 // auto-answer on this ring, 0 = never (the host sends ATA)
 };
 
-enum State { IDLE, ANSWERING, ONLINE, ONLINE_CMD };  // on-hook, caller not yet announced, data, after +++
+enum State { IDLE, SCREENING, RINGING, ONLINE, ONLINE_CMD };  // on-hook, caller not yet announced, RING, data, after +++
 
 static const uint32_t BAUDS[] = { 300, 1200, 2400, 4800, 9600, 19200, 38400, 57600, 115200 };
 
@@ -48,7 +51,9 @@ static int ntcpOut = 0;
 static uint32_t lastModemMs = 0;        // when the last byte came from the host
 static uint8_t early[4];                // an answering caller's first bytes
 static int nearly = 0;
-static uint32_t answerMs = 0;           // when the answering caller connected
+static uint32_t answerMs = 0;           // when the caller being screened connected
+static int rings = 0;                   // RINGs sent for the ringing caller
+static uint32_t ringMs = 0;             // when the last RING went out
 
 static void defaults(Config &c) {
     memset(&c, 0, sizeof c);
@@ -56,6 +61,7 @@ static void defaults(Config &c) {
     c.baud = 19200;
     c.port = 23;
     c.echo = 1;
+    c.s0 = 1;
 }
 
 static bool validBaud(uint32_t b) {
@@ -69,6 +75,7 @@ static void loadProfile(Config &c) {
     if (c.magic != CONFIG_MAGIC || !validBaud(c.baud) || c.port == 0) defaults(c);
     c.ssid[sizeof c.ssid - 1] = 0;
     c.pass[sizeof c.pass - 1] = 0;
+    if (c.s0 == 0xFF) c.s0 = 1;         // erased flash: saved before S0 existed (so S0 tops out at 254)
 }
 
 static void wifiBegin() {
@@ -118,6 +125,13 @@ static void goOnline() {
     lastModemMs = millis();
     snprintf(buf, sizeof buf, "CONNECT %lu", (unsigned long)cfg.baud);
     result(buf);
+}
+
+// ATA or the S0th RING.
+static void answer() {
+    nline = 0;
+    goOnline();
+    Modem.write(early, nearly);
 }
 
 // The call is over (remote gone or ATH): NO CARRIER, on-hook.
@@ -183,6 +197,7 @@ static void showInfo() {
     info("PORT: %u", cfg.port);
     info("BAUD: %lu", (unsigned long)cfg.baud);
     info("FLOW: %s", cfg.flow == 3 ? "RTS/CTS" : "NONE");
+    info("S0: %u", cfg.s0);
     info("BANS: %d", banCount());
 }
 
@@ -211,6 +226,12 @@ static void runLine() {
         int v = c.num < 0 ? 0 : c.num;
         if (c.prefix == 0) {
             switch (c.name[0]) {
+            case 'A':                   // nothing ringing: NO CARRIER, as when no carrier answers
+                if (state == ONLINE_CMD) { err = true; break; }
+                apply(next);
+                if (state == RINGING) answer();
+                else result("NO CARRIER");
+                return;
             case 'D':
                 if (state != IDLE) { err = true; break; }
                 apply(next);
@@ -270,6 +291,10 @@ static void runLine() {
             if (c.op == '?') info("$PORT: %u", next.port);
             else if (c.op == '=' && p >= 1 && p <= 65535) next.port = (uint16_t)p;
             else err = true;
+        } else if (c.prefix == 'S' && c.num == 0) {
+            if (c.op == '?') info("%03u", next.s0);
+            else if (c.op == '=' && c.val <= 254) next.s0 = (uint8_t)c.val;
+            else if (c.op == '=') err = true;
         }
         // everything else parses and is ignored
     }
@@ -409,13 +434,13 @@ static void acceptCaller() {
     callerIp = ip;
     nearly = 0;
     answerMs = millis();
-    state = ANSWERING;
+    state = SCREENING;
 }
 
 // A new caller's first 4 bytes decide: "GET " is an HTTP scanner, banned
 // and dropped. So is a caller that hangs up first. Anything else, or
-// ANSWER_MS without 4 bytes, is answered and the bytes go to the host.
-static void checkAnswer() {
+// ANSWER_MS without 4 bytes, rings, and the bytes go to the host on answer.
+static void checkScreen() {
     while (nearly < 4 && client.available()) early[nearly++] = (uint8_t)client.read();
     if (nearly == 4 && !memcmp(early, "GET ", 4)) {
         banStrike(callerIp, millis());
@@ -424,9 +449,21 @@ static void checkAnswer() {
     }
     if (!client.connected() && !client.available()) { dropCaller(); return; }
     if (nearly < 4 && millis() - answerMs < ANSWER_MS) return;
-    nline = 0;
-    goOnline();
-    Modem.write(early, nearly);
+    rings = 0;
+    ringMs = millis() - RING_MS;        // first RING now
+    state = RINGING;
+}
+
+// RING every RING_MS until S0 rings or ATA answer. A caller that hangs up
+// stops it; under S0=0 one nobody answers is dropped, so it can't hold the line.
+static void checkRing() {
+    if (!client.connected() && !client.available()) { dropCaller(); return; }
+    if (millis() - ringMs < RING_MS) return;
+    if (cfg.s0 == 0 && rings >= RING_MAX) { dropCaller(); return; }
+    ringMs = millis();
+    rings++;
+    result("RING");
+    if (cfg.s0 && rings >= cfg.s0) answer();   // >=: ATS0 may lower it mid-ring
 }
 
 // FLASH held BAUD_RESET_MS → 19200 in RAM (AT&W keeps it). Once per press.
@@ -490,13 +527,14 @@ void setup() {
 void loop() {
     checkBaudReset();
     acceptCaller();
-    if (state == ANSWERING) checkAnswer();
+    if (state == SCREENING) checkScreen();
+    if (state == RINGING) checkRing();
     if (state == ONLINE) {
         pumpToModem();
         pumpToTcp();
         checkGuard();
     } else {
-        while (Modem.available() && state != ONLINE) commandByte((char)Modem.read());  // IDLE, ANSWERING, ONLINE_CMD
+        while (Modem.available() && state != ONLINE) commandByte((char)Modem.read());  // IDLE, SCREENING, RINGING, ONLINE_CMD
         if (state == ONLINE_CMD) {      // remote data in command mode is dropped, as in modem.c
             uint8_t buf[128];
             while (client.available()) client.read(buf, sizeof buf);

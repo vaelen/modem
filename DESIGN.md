@@ -153,7 +153,7 @@ Anything unrecognised still parses cleanly and returns `OK`, so terminal init st
 | Command         | Effect                                                             | Profile |
 |-----------------|--------------------------------------------------------------------|---------|
 | `ATD[T\|P]h[:p]`| dial; `CONNECT <baud>` / `NO CARRIER`; `ERROR` if not on-hook      |         |
-| `ATH[0]`        | online-cmd: hang up; always `NO CARRIER` (hosts have no DCD)       |         |
+| `ATH[0]`        | online-cmd: hang up; `OK` either way, as on a Hayes                |         |
 | `ATO`           | online-cmd: back to data, `CONNECT <baud>`                         |         |
 | `ATA`           | answer a ringing caller; `NO CARRIER` if none, `ERROR` online-cmd  |         |
 | `ATS0=n`        | answer on the nth `RING` (0–254, default 1); 0 = only `ATA`        | yes     |

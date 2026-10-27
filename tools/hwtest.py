@@ -226,11 +226,11 @@ def test_calls(ser, a):
     eq(rd(ser, 1), b"")
     # ATH0 hangs up; the caller is dropped; command mode still works
     escape(ser)
-    eq(at(ser, b"ATH0"), NOCARRIER)
+    eq(at(ser, b"ATH0"), OK)
     assert eof(caller)
     caller.close()
     eq(at(ser, b"AT"), OK)
-    eq(at(ser, b"ATH"), NOCARRIER)                      # already on-hook
+    eq(at(ser, b"ATH"), OK)                             # already on-hook
     # caller hangs up
     caller = call()
     eq(rd(ser), RING + CONNECT)
@@ -264,7 +264,7 @@ def test_calls(ser, a):
     peer, _ = peer_l.accept()
     eq(rd(ser, 12), CONNECT)
     escape(ser)
-    eq(at(ser, b"ATH"), NOCARRIER)
+    eq(at(ser, b"ATH"), OK)
     assert eof(peer)
     peer.close()
     # a peer flooding faster than 19200 must not swallow the escape
@@ -290,7 +290,7 @@ def test_calls(ser, a):
     caller = call()
     eq(rd(ser), RING + CONNECT)
     escape(ser)
-    eq(at(ser, b"AT+BAN;H"), NOCARRIER)
+    eq(at(ser, b"AT+BAN;H"), OK)
     caller.close()
     for _ in range(20):                                 # a bot hammering: every try dropped
         c = call()
@@ -412,7 +412,7 @@ def test_flow(ser, a):
         time.sleep(0.5)
         assert ser.cts, "CTS did not come back"
     escape(ser)
-    eq(at(ser, b"ATH"), NOCARRIER)
+    eq(at(ser, b"ATH"), OK)
     peer.close()
     # &K0: RTS is ignored
     eq(at(ser, b"AT&K0"), OK)
@@ -425,7 +425,7 @@ def test_flow(ser, a):
     eq(rd(ser), b"xyz")
     ser.rts = True
     escape(ser)
-    eq(at(ser, b"ATH"), NOCARRIER)
+    eq(at(ser, b"ATH"), OK)
     peer.close()
     peer_l.close()
     eq(at(ser, b"ATZ"), OK)

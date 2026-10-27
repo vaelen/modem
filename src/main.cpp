@@ -134,15 +134,15 @@ static void answer() {
     Modem.write(early, nearly);
 }
 
-// The call is over (remote gone or ATH): NO CARRIER, on-hook.
-static void hangup() {
+// The call is over: on-hook, then res. ATH/ATZ pass nullptr and get the line's OK, as on a Hayes.
+static void hangup(const char *res = "NO CARRIER") {
     client.stop();
     callerIp = 0;
     nheld = 0;
     ntcpOut = 0;
     nline = 0;
     state = IDLE;
-    result("NO CARRIER");
+    if (res) result(res);
 }
 
 // ATD: "host[:port]", spaces ignored, port 23 by default. Blocks for up to
@@ -237,11 +237,9 @@ static void runLine() {
                 apply(next);
                 dial(c.arg);            // prints its own result
                 return;
-            case 'H':                   // on-hook already: NO CARRIER again, for hosts with no DCD
-                apply(next);
-                if (state == ONLINE_CMD) hangup();
-                else result("NO CARRIER");
-                return;
+            case 'H':
+                if (state == ONLINE_CMD) hangup(nullptr);
+                break;
             case 'O':
                 if (state == ONLINE_CMD) { apply(next); goOnline(); return; }
                 break;
@@ -251,7 +249,7 @@ static void runLine() {
                 break;
             case 'I': showInfo(); break;
             case 'Z':
-                if (state == ONLINE_CMD) hangup();
+                if (state == ONLINE_CMD) hangup(nullptr);
                 loadProfile(next);
                 break;
             }

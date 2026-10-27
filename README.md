@@ -110,7 +110,7 @@ accepted with `OK`, so terminal init strings work.
     and is dropped silently.
   - A caller arriving while a call is up gets `BUSY, PLEASE TRY AGAIN LATER`.
 - **Outgoing:** `ATDT bbs.example.com:23`. Dialing blocks for up to 10 s while it connects.
-- **End of call:** `NO CARRIER` when either side hangs up.
+- **End of call:** `NO CARRIER` when the other side hangs up; `ATH` replies `OK`, as on a Hayes.
 
 ## IP bans
 

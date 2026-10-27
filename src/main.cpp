@@ -343,7 +343,7 @@ static void tcpFlush() {
     memmove(tcpOut, tcpOut + w, ntcpOut - w);
     ntcpOut -= w;
     if (ntcpOut == 0) stallMs = 0;
-    else if (w > 0 || stallMs == 0) stallMs = millis() | 1;   // | 1: 0 means not stalled
+    else if (stallMs == 0) stallMs = millis() | 1;   // | 1: 0 means not stalled; a trickle doesn't reset it
 }
 
 // Data mode, host → TCP. A '+' after >= GUARD_MS of silence starts holding

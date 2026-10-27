@@ -18,6 +18,7 @@
 #define ANSWER_MS 1000          // wait this long for a new caller's first 4 bytes
 #define RING_MS 6000            // one RING every 6 s, like a US phone line
 #define RING_MAX 10             // under S0=0, a caller nobody answers is dropped after this many
+#define STALL_MS 60000          // TCP took no byte this long: the peer is dead, drop the call
 #define CONFIG_MAGIC 0x314D444DUL   // "MDM1" little-endian
 
 struct Config {
@@ -48,6 +49,7 @@ static int nheld = 0;                   // '+' bytes held back pending the guard
 static uint32_t ledFlashStart = 0;      // when a FLASH-button reset started its 1 s of blinks
 static uint8_t tcpOut[160];             // host bytes TCP hasn't taken yet (128 read + held '+')
 static int ntcpOut = 0;
+static uint32_t stallMs = 0;           // when TCP last took a byte while ntcpOut > 0, 0 = not stalled
 static uint32_t lastModemMs = 0;        // when the last byte came from the host
 static uint8_t early[4];                // an answering caller's first bytes
 static int nearly = 0;
@@ -140,6 +142,7 @@ static void hangup() {
     callerIp = 0;
     nheld = 0;
     ntcpOut = 0;
+    stallMs = 0;
     nline = 0;
     state = IDLE;
     result("NO CARRIER");
@@ -339,6 +342,8 @@ static void tcpFlush() {
     int w = (int)client.write(tcpOut, ntcpOut);
     memmove(tcpOut, tcpOut + w, ntcpOut - w);
     ntcpOut -= w;
+    if (ntcpOut == 0) stallMs = 0;
+    else if (w > 0 || stallMs == 0) stallMs = millis() | 1;   // | 1: 0 means not stalled
 }
 
 // Data mode, host → TCP. A '+' after >= GUARD_MS of silence starts holding
@@ -533,6 +538,11 @@ void loop() {
         pumpToModem();
         pumpToTcp();
         checkGuard();
+        // A peer that stops taking bytes (zero window, or gone and lwIP still
+        // retransmitting) leaves host bytes unread in the UART -- the +++ and
+        // ATH too, so the host couldn't hang up; they'd all run when lwIP
+        // finally gave up. Drop it instead; the backlog then runs on-hook.
+        if (stallMs && millis() - stallMs >= STALL_MS) hangup();
     } else {
         while (Modem.available() && state != ONLINE) commandByte((char)Modem.read());  // IDLE, SCREENING, RINGING, ONLINE_CMD
         if (state == ONLINE_CMD) {      // remote data in command mode is dropped, as in modem.c

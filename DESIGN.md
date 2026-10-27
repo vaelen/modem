@@ -121,8 +121,6 @@ Each `loop()` pass does this:
      buffer does), and refused bytes stay in the buffer for the next pass. While any are waiting, host
      bytes aren't read, so they back up in the UART receive buffer and CTS (step 5) stops the host
      before it overflows. (The core's default is to block for the whole timeout, then drop the rest.)
-     A stall with no byte taken for 60 s (`STALL_MS`) hangs up: the unread host bytes include its
-     `+++`/`ATH`, so otherwise the host can't end the call until lwIP gives up on the peer.
    - **TCP → Modem:** copy only `min(client.available(), Modem.availableForWrite())` bytes, and nothing
      at all while RTS is deasserted under `&K3`. Unread data stays in lwIP and the TCP window closes.
      That's the backpressure `LQ_MAX` gave `modem.c`, with no queue to manage.
